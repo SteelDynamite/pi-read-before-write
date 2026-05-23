@@ -1,0 +1,51 @@
+{
+  "name": "pi-read-before-write",
+  "version": "0.1.0",
+  "description": "Pi extension that blocks stale edit/write operations when files changed since the agent last read them.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SteelDynamite/pi-read-before-write.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SteelDynamite/pi-read-before-write/issues"
+  },
+  "homepage": "https://github.com/SteelDynamite/pi-read-before-write#readme",
+  "engines": {
+    "node": ">=22"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "read-before-write",
+    "stale-file-protection"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.75.5",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}
