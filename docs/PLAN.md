@@ -31,10 +31,10 @@ The extension should block `edit` and destructive `write` calls when the target 
 
 On successful `read` tool result:
 
-- Resolve the input path against `ctx.cwd`.
+- Normalize the input path similarly to Pi core: normalize Unicode spaces, strip leading `@`, expand `~`, support `file://` URLs, then resolve against `ctx.cwd`.
 - Canonicalize with `realpath()` when possible.
 - Read raw bytes directly from disk.
-- Store:
+- Store in a bounded LRU cache:
   - canonical path
   - SHA-256 hash
   - byte size
@@ -72,23 +72,13 @@ After successful `write`:
 
 ## Path handling
 
-Use a helper:
+Current helper behavior:
 
-```ts
-async function resolveTrackedPath(inputPath: string, cwd: string): Promise<string> {
-  const cleaned = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-  const absolute = path.isAbsolute(cleaned) ? cleaned : path.resolve(cwd, cleaned);
-  try {
-    return await fs.realpath(absolute);
-  } catch {
-    return absolute;
-  }
-}
-```
-
-Notes:
-
-- Match Pi's common behavior of stripping leading `@` from file paths.
+- Normalize Unicode space variants to regular spaces.
+- Strip a leading `@` from file paths.
+- Expand `~` and `~/` to the user home directory.
+- Convert `file://` URLs to file paths.
+- Resolve relative paths against `ctx.cwd`.
 - Use `realpath()` for existing files so symlink aliases share one fingerprint.
 - For missing files, use resolved absolute path.
 
@@ -120,6 +110,8 @@ const config = {
   requireReadBeforeExistingWrite: true,
   allowNewFileWriteWithoutRead: true,
   hashAlgorithm: "sha256",
+  maxFingerprints: 100,
+  maxFingerprintBytes: 1024 * 1024,
 };
 ```
 
@@ -158,10 +150,11 @@ Blocked stale write: file was deleted since the last read: path/to/file.ts
 3. In-memory state is intentionally lost on Pi restart; resumed sessions should re-read files before editing.
 4. Multiple Pi processes do not share state.
 5. Very large files require hashing full contents; acceptable for prototype, but may need max-size handling later.
+6. The fingerprint cache is bounded; evicted files must be read again before editing.
 
 ## Test matrix
 
-Manual tests:
+Automated tests cover:
 
 1. Read file, edit file: allowed.
 2. Edit file without read: blocked.
@@ -170,9 +163,14 @@ Manual tests:
 5. Write new file without read: allowed.
 6. Write existing file without read: blocked.
 7. Read existing file, write it: allowed.
-8. Read CRLF file, edit without external change: allowed.
-9. Read via symlink, edit via real path: should use same fingerprint.
-10. Successful edit updates fingerprint so another edit immediately after succeeds.
+8. Read via symlink, edit via real path: should use same fingerprint.
+9. Read with leading `@`, edit without it: allowed.
+10. Read via `file://` URL, edit via normal path: allowed.
+11. Unicode-space path normalization: allowed.
+12. Successful edit updates fingerprint so another edit immediately after succeeds.
+13. Successful write updates fingerprint so another write immediately after succeeds.
+14. LRU eviction blocks editing an evicted file until it is read again.
+15. LRU access refreshes recency.
 
 ## Upstream path
 
@@ -202,7 +200,7 @@ interface Fingerprint {
   recordedAt: number;
 }
 
-const fingerprints = new Map<string, Fingerprint>();
+const fingerprints = new FingerprintCache(100, 1024 * 1024);
 
 export default function readBeforeWrite(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {

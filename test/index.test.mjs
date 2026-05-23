@@ -174,6 +174,29 @@ test("read path with leading at-sign allows normal path edit", async () => {
 	});
 });
 
+test("file URL read allows normal path edit", async () => {
+	await withHarness(async (harness) => {
+		const filePath = path.join(harness.cwd, "file-url.txt");
+		await fs.writeFile(filePath, "one");
+		await readTool(harness, new URL(`file://${filePath}`).href);
+
+		const result = await harness.emit("tool_call", { toolName: "edit", input: { path: "file-url.txt" } });
+
+		assert.equal(result, undefined);
+	});
+});
+
+test("unicode spaces in paths normalize to regular spaces", async () => {
+	await withHarness(async (harness) => {
+		await fs.writeFile(path.join(harness.cwd, "space file.txt"), "one");
+		await readTool(harness, "space\u202Ffile.txt");
+
+		const result = await harness.emit("tool_call", { toolName: "edit", input: { path: "space file.txt" } });
+
+		assert.equal(result, undefined);
+	});
+});
+
 test("successful edit refreshes the fingerprint", async () => {
 	await withHarness(async (harness) => {
 		const filePath = path.join(harness.cwd, "file.txt");

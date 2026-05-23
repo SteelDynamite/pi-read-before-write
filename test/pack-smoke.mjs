@@ -16,6 +16,7 @@ async function run(command, args, options = {}) {
 	});
 }
 
+const rootManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
 const { stdout } = await run("npm", ["pack", "--json"]);
 const packInfo = JSON.parse(stdout).at(0);
 assert.ok(packInfo?.filename, "npm pack did not return a tarball filename");
@@ -41,7 +42,7 @@ try {
 	const manifestText = await fs.readFile(path.join(tempDir, "node_modules/pi-read-before-write/package.json"), "utf8");
 	const manifest = JSON.parse(manifestText);
 	assert.deepEqual(manifest.pi?.extensions, ["./dist/index.js"]);
-	assert.equal(manifest.version, "0.1.2");
+	assert.equal(manifest.version, rootManifest.version);
 } finally {
 	await fs.rm(tempDir, { recursive: true, force: true });
 	await fs.rm(tarball, { force: true });

@@ -1,6 +1,6 @@
 {
   "name": "pi-read-before-write",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Pi extension that blocks stale edit/write operations when files changed since the agent last read them.",
   "type": "module",
   "main": "dist/index.js",

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.3 - 2026-05-23
+
+- Match more of Pi core's path normalization: Unicode spaces, leading `@`, `~`, and `file://` URLs.
+- Add automated tests for `file://` paths and Unicode-space normalization.
+- Update README and implementation plan documentation after audit.
+- Make pack smoke test compare against the root package version dynamically.
+
 ## v0.1.2 - 2026-05-23
 
 - Bound fingerprint tracking with a 100-entry / 1MB LRU cache.

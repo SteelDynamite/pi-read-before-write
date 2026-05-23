@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 
@@ -87,10 +89,28 @@ function fingerprintSize(fingerprint: Fingerprint): number {
 
 const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
 const localQueues = new Map<string, Promise<unknown>>();
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+function normalizeToolPath(inputPath: string): string {
+	let normalized = inputPath.replace(UNICODE_SPACES, " ");
+	if (normalized.startsWith("@")) {
+		normalized = normalized.slice(1);
+	}
+	if (normalized === "~") {
+		return os.homedir();
+	}
+	if (normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))) {
+		return path.join(os.homedir(), normalized.slice(2));
+	}
+	if (/^file:\/\//.test(normalized)) {
+		return fileURLToPath(normalized);
+	}
+	return normalized;
+}
 
 export async function resolveTrackedPath(inputPath: string, cwd: string): Promise<string> {
-	const cleaned = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-	const absolute = path.isAbsolute(cleaned) ? cleaned : path.resolve(cwd, cleaned);
+	const cleaned = normalizeToolPath(inputPath);
+	const absolute = path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(cwd, cleaned);
 	try {
 		return await fs.realpath(absolute);
 	} catch {

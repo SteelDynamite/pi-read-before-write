@@ -13,19 +13,19 @@ This adds Claude Code-style stale-file protection to Pi without patching Pi core
 From npm:
 
 ```bash
-pi install npm:pi-read-before-write@0.1.2
+pi install npm:pi-read-before-write
 ```
 
 From GitHub:
 
 ```bash
-pi install git:github.com/SteelDynamite/pi-read-before-write@v0.1.2
+pi install git:github.com/SteelDynamite/pi-read-before-write
 ```
 
 For project-local install:
 
 ```bash
-pi install -l npm:pi-read-before-write@0.1.2
+pi install -l npm:pi-read-before-write
 ```
 
 For local development/testing:
@@ -45,7 +45,7 @@ pi -e ./dist/index.js
 - If a previously read file is deleted before `edit` or `write`, the operation is blocked.
 - Successful `edit`/`write` calls refresh the recorded fingerprint.
 - Fingerprints are held in a bounded LRU cache: 100 files or 1MB of fingerprint metadata, whichever is hit first.
-- Paths are resolved against Pi's current working directory, strip a leading `@`, and use `realpath()` when possible so symlink aliases share one fingerprint.
+- Paths are resolved against Pi's current working directory, normalize Unicode spaces, strip a leading `@`, expand `~`, support `file://` URLs, and use `realpath()` when possible so symlink aliases share one fingerprint.
 
 ## Block messages
 
@@ -74,12 +74,16 @@ Blocked stale write: file was deleted since the last read: path/to/file.ts
 3. Fingerprints are in memory and are lost when Pi restarts; resumed sessions should re-read files before editing.
 4. Multiple Pi processes do not share fingerprint state.
 5. Large files are hashed in full.
+6. Fingerprints can be evicted from the bounded LRU cache; evicted files must be read again before editing.
 
 ## Development
 
 ```bash
 npm install
 npm run typecheck
+npm test
+npm run test:pack
+npm run audit:release
 npm run build
 ```
 
