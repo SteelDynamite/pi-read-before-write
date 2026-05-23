@@ -25,9 +25,67 @@ const config = {
 	requireReadBeforeExistingWrite: true,
 	allowNewFileWriteWithoutRead: true,
 	hashAlgorithm: "sha256",
+	maxFingerprints: 100,
+	maxFingerprintBytes: 1024 * 1024,
 } as const;
 
-const fingerprints = new Map<string, Fingerprint>();
+class FingerprintCache {
+	private readonly entries = new Map<string, Fingerprint>();
+	private totalBytes = 0;
+
+	constructor(
+		private readonly maxEntries: number,
+		private readonly maxBytes: number,
+	) {}
+
+	get(key: string): Fingerprint | undefined {
+		const value = this.entries.get(key);
+		if (!value) return undefined;
+		this.entries.delete(key);
+		this.entries.set(key, value);
+		return value;
+	}
+
+	set(key: string, value: Fingerprint): void {
+		const existing = this.entries.get(key);
+		if (existing) {
+			this.totalBytes -= fingerprintSize(existing);
+			this.entries.delete(key);
+		}
+
+		this.entries.set(key, value);
+		this.totalBytes += fingerprintSize(value);
+		this.evictIfNeeded();
+	}
+
+	delete(key: string): void {
+		const existing = this.entries.get(key);
+		if (!existing) return;
+		this.totalBytes -= fingerprintSize(existing);
+		this.entries.delete(key);
+	}
+
+	private evictIfNeeded(): void {
+		while (this.entries.size > this.maxEntries || this.totalBytes > this.maxBytes) {
+			const oldest = this.entries.entries().next().value as [string, Fingerprint] | undefined;
+			if (!oldest) break;
+			const [key, value] = oldest;
+			this.totalBytes -= fingerprintSize(value);
+			this.entries.delete(key);
+		}
+	}
+}
+
+function fingerprintSize(fingerprint: Fingerprint): number {
+	return (
+		Buffer.byteLength(fingerprint.path) +
+		Buffer.byteLength(fingerprint.displayPath) +
+		Buffer.byteLength(fingerprint.hash) +
+		16
+	);
+}
+
+const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
 const localQueues = new Map<string, Promise<unknown>>();
 
 export async function resolveTrackedPath(inputPath: string, cwd: string): Promise<string> {
@@ -106,25 +164,26 @@ async function guardFreshness(
 	const trackedPath = await resolveTrackedPath(inputPath, cwd);
 	return queuedFileOperation(trackedPath, async () => {
 		const exists = await pathExists(trackedPath);
+		const fingerprint = fingerprints.get(trackedPath);
 
-		if (toolName === "write" && !exists && config.allowNewFileWriteWithoutRead) {
-			return undefined;
+		if (!exists) {
+			if (fingerprint) {
+				return {
+					block: true,
+					reason: `Blocked stale write: file was deleted since the last read: ${inputPath}`,
+				};
+			}
+			if (toolName === "write" && config.allowNewFileWriteWithoutRead) {
+				return undefined;
+			}
 		}
 
-		const fingerprint = fingerprints.get(trackedPath);
 		if (!fingerprint) {
 			if (toolName === "edit" && !config.requireReadBeforeEdit) return undefined;
 			if (toolName === "write" && !config.requireReadBeforeExistingWrite) return undefined;
 			return {
 				block: true,
 				reason: `Blocked stale write: file has not been read in this session. Read it before editing: ${inputPath}`,
-			};
-		}
-
-		if (!exists) {
-			return {
-				block: true,
-				reason: `Blocked stale write: file was deleted since the last read: ${inputPath}`,
 			};
 		}
 

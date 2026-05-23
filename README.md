@@ -2,22 +2,30 @@
 
 Pi package that blocks stale `edit` and destructive existing-file `write` operations when files changed since the agent last read them.
 
+> Disclaimer: this is clanker slop. Use at your own risk.
+
 ## Why
 
 This adds Claude Code-style stale-file protection to Pi without patching Pi core. It reduces accidental clobbers when a file is edited externally, by another agent, or by a parallel workflow after the current agent last read it.
 
 ## Install
 
+From npm:
+
+```bash
+pi install npm:pi-read-before-write@0.1.2
+```
+
 From GitHub:
 
 ```bash
-pi install git:github.com/SteelDynamite/pi-read-before-write@v0.1.0
+pi install git:github.com/SteelDynamite/pi-read-before-write@v0.1.2
 ```
 
 For project-local install:
 
 ```bash
-pi install -l git:github.com/SteelDynamite/pi-read-before-write@v0.1.0
+pi install -l npm:pi-read-before-write@0.1.2
 ```
 
 For local development/testing:
@@ -25,7 +33,7 @@ For local development/testing:
 ```bash
 npm install
 npm run build
-pi -e ./src/index.ts
+pi -e ./dist/index.js
 ```
 
 ## Behavior
@@ -34,7 +42,9 @@ pi -e ./src/index.ts
 - `edit` is blocked unless the file was read in the current Pi session and is unchanged.
 - `write` to an existing file is blocked unless the file was read in the current Pi session and is unchanged.
 - `write` to a new file is allowed.
+- If a previously read file is deleted before `edit` or `write`, the operation is blocked.
 - Successful `edit`/`write` calls refresh the recorded fingerprint.
+- Fingerprints are held in a bounded LRU cache: 100 files or 1MB of fingerprint metadata, whichever is hit first.
 - Paths are resolved against Pi's current working directory, strip a leading `@`, and use `realpath()` when possible so symlink aliases share one fingerprint.
 
 ## Block messages
