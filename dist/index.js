@@ -64,6 +64,7 @@ function fingerprintSize(fingerprint) {
         16);
 }
 const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
+const absolutePathAliases = new Map();
 const localQueues = new Map();
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 function normalizeToolPath(inputPath) {
@@ -82,15 +83,21 @@ function normalizeToolPath(inputPath) {
     }
     return normalized;
 }
-export async function resolveTrackedPath(inputPath, cwd) {
+function resolveAbsolutePath(inputPath, cwd) {
     const cleaned = normalizeToolPath(inputPath);
-    const absolute = path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(cwd, cleaned);
+    return path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(cwd, cleaned);
+}
+export async function resolveTrackedPath(inputPath, cwd) {
+    const absolute = resolveAbsolutePath(inputPath, cwd);
     try {
         return await fs.realpath(absolute);
     }
     catch {
         return absolute;
     }
+}
+function getFingerprint(trackedPath, absolutePath) {
+    return fingerprints.get(trackedPath) ?? fingerprints.get(absolutePathAliases.get(absolutePath) ?? "");
 }
 async function pathExists(filePath) {
     try {
@@ -109,6 +116,7 @@ async function hashFile(filePath) {
     };
 }
 async function recordFingerprint(inputPath, cwd) {
+    const absolutePath = resolveAbsolutePath(inputPath, cwd);
     const trackedPath = await resolveTrackedPath(inputPath, cwd);
     try {
         const { hash, size } = await hashFile(trackedPath);
@@ -120,10 +128,15 @@ async function recordFingerprint(inputPath, cwd) {
             recordedAt: Date.now(),
         };
         fingerprints.set(trackedPath, fingerprint);
+        absolutePathAliases.set(absolutePath, trackedPath);
         return fingerprint;
     }
     catch {
         fingerprints.delete(trackedPath);
+        const alias = absolutePathAliases.get(absolutePath);
+        if (alias)
+            fingerprints.delete(alias);
+        absolutePathAliases.delete(absolutePath);
         return undefined;
     }
 }
@@ -144,10 +157,11 @@ function getPathInput(event) {
     return typeof event.input.path === "string" ? event.input.path : undefined;
 }
 async function guardFreshness(toolName, inputPath, cwd) {
+    const absolutePath = resolveAbsolutePath(inputPath, cwd);
     const trackedPath = await resolveTrackedPath(inputPath, cwd);
     return queuedFileOperation(trackedPath, async () => {
         const exists = await pathExists(trackedPath);
-        const fingerprint = fingerprints.get(trackedPath);
+        const fingerprint = getFingerprint(trackedPath, absolutePath);
         if (!exists) {
             if (fingerprint) {
                 return {

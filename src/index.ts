@@ -88,6 +88,7 @@ function fingerprintSize(fingerprint: Fingerprint): number {
 }
 
 const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
+const absolutePathAliases = new Map<string, string>();
 const localQueues = new Map<string, Promise<unknown>>();
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
@@ -108,14 +109,22 @@ function normalizeToolPath(inputPath: string): string {
 	return normalized;
 }
 
-export async function resolveTrackedPath(inputPath: string, cwd: string): Promise<string> {
+function resolveAbsolutePath(inputPath: string, cwd: string): string {
 	const cleaned = normalizeToolPath(inputPath);
-	const absolute = path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(cwd, cleaned);
+	return path.isAbsolute(cleaned) ? path.resolve(cleaned) : path.resolve(cwd, cleaned);
+}
+
+export async function resolveTrackedPath(inputPath: string, cwd: string): Promise<string> {
+	const absolute = resolveAbsolutePath(inputPath, cwd);
 	try {
 		return await fs.realpath(absolute);
 	} catch {
 		return absolute;
 	}
+}
+
+function getFingerprint(trackedPath: string, absolutePath: string): Fingerprint | undefined {
+	return fingerprints.get(trackedPath) ?? fingerprints.get(absolutePathAliases.get(absolutePath) ?? "");
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -136,6 +145,7 @@ async function hashFile(filePath: string): Promise<{ hash: string; size: number 
 }
 
 async function recordFingerprint(inputPath: string, cwd: string): Promise<Fingerprint | undefined> {
+	const absolutePath = resolveAbsolutePath(inputPath, cwd);
 	const trackedPath = await resolveTrackedPath(inputPath, cwd);
 	try {
 		const { hash, size } = await hashFile(trackedPath);
@@ -147,9 +157,13 @@ async function recordFingerprint(inputPath: string, cwd: string): Promise<Finger
 			recordedAt: Date.now(),
 		};
 		fingerprints.set(trackedPath, fingerprint);
+		absolutePathAliases.set(absolutePath, trackedPath);
 		return fingerprint;
 	} catch {
 		fingerprints.delete(trackedPath);
+		const alias = absolutePathAliases.get(absolutePath);
+		if (alias) fingerprints.delete(alias);
+		absolutePathAliases.delete(absolutePath);
 		return undefined;
 	}
 }
@@ -181,10 +195,11 @@ async function guardFreshness(
 	inputPath: string,
 	cwd: string,
 ): Promise<{ block: true; reason: string } | undefined> {
+	const absolutePath = resolveAbsolutePath(inputPath, cwd);
 	const trackedPath = await resolveTrackedPath(inputPath, cwd);
 	return queuedFileOperation(trackedPath, async () => {
 		const exists = await pathExists(trackedPath);
-		const fingerprint = fingerprints.get(trackedPath);
+		const fingerprint = getFingerprint(trackedPath, absolutePath);
 
 		if (!exists) {
 			if (fingerprint) {
