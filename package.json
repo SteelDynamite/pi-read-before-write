@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
+    "index.js",
     "dist",
     "src",
     "README.md",
@@ -25,7 +26,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./index.js"
     ]
   },
   "scripts": {
