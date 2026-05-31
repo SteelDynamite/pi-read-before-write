@@ -200,11 +200,7 @@ export default function readBeforeWrite(pi) {
         const inputPath = getPathInput(event);
         if (!inputPath)
             return undefined;
-        const result = await guardFreshness(event.toolName, inputPath, ctx.cwd);
-        if (result?.block && ctx.hasUI) {
-            ctx.ui.notify(result.reason, "warning");
-        }
-        return result;
+        return guardFreshness(event.toolName, inputPath, ctx.cwd);
     });
     pi.on("tool_result", async (event, ctx) => {
         if (event.isError)

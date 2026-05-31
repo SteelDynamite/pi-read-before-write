@@ -69,7 +69,7 @@ test("edit without a prior read is blocked", async () => {
 
 		assert.equal(result?.block, true);
 		assert.match(result.reason, /file has not been read/);
-		assert.equal(harness.notifications.at(-1)?.level, "warning");
+		assert.deepEqual(harness.notifications, []);
 	});
 });
 
