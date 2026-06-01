@@ -8,8 +8,16 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, "..");
 
-async function run(command, args, options = {}) {
-	return execFileAsync(command, args, {
+function getNpmInvocation(args) {
+	if (process.platform !== "win32") return { command: "npm", args };
+
+	const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+	return { command: process.execPath, args: [npmCli, ...args] };
+}
+
+async function runNpm(args, options = {}) {
+	const invocation = getNpmInvocation(args);
+	return execFileAsync(invocation.command, invocation.args, {
 		cwd: projectRoot,
 		maxBuffer: 1024 * 1024 * 10,
 		...options,
@@ -17,7 +25,7 @@ async function run(command, args, options = {}) {
 }
 
 const rootManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
-const { stdout } = await run("npm", ["pack", "--json"]);
+const { stdout } = await runNpm(["pack", "--json"]);
 const packInfo = JSON.parse(stdout).at(0);
 assert.ok(packInfo?.filename, "npm pack did not return a tarball filename");
 
@@ -25,8 +33,8 @@ const tarball = path.join(projectRoot, packInfo.filename);
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rbw-pack-"));
 
 try {
-	await execFileAsync("npm", ["init", "-y"], { cwd: tempDir, maxBuffer: 1024 * 1024 * 10 });
-	await execFileAsync("npm", ["install", "--omit=dev", tarball], { cwd: tempDir, maxBuffer: 1024 * 1024 * 10 });
+	await runNpm(["init", "-y"], { cwd: tempDir });
+	await runNpm(["install", "--omit=dev", tarball], { cwd: tempDir });
 
 	const importCheck = await execFileAsync(
 		"node",
@@ -41,7 +49,7 @@ try {
 
 	const manifestText = await fs.readFile(path.join(tempDir, "node_modules/pi-read-before-write/package.json"), "utf8");
 	const manifest = JSON.parse(manifestText);
-	assert.deepEqual(manifest.pi?.extensions, ["./dist/index.js"]);
+	assert.deepEqual(manifest.pi?.extensions, rootManifest.pi?.extensions);
 	assert.equal(manifest.version, rootManifest.version);
 } finally {
 	await fs.rm(tempDir, { recursive: true, force: true });
