@@ -87,6 +87,8 @@ npm run audit:release
 npm run build
 ```
 
+The package has no runtime npm dependencies; it uses Pi's extension API structurally and keeps its file-mutation queue locally.
+
 The implementation lives in `src/index.ts`. The original design notes are in [docs/PLAN.md](docs/PLAN.md).
 
 ## License

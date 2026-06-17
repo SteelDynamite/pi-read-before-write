@@ -3,8 +3,22 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+
+interface ExtensionContext {
+	cwd: string;
+}
+
+interface ExtensionAPI {
+	on(name: "tool_call", handler: ExtensionHandler<ToolCallResult | undefined>): void;
+	on(name: "tool_result", handler: ExtensionHandler<undefined>): void;
+}
+
+type ExtensionHandler<T> = (event: ToolEventWithPath, ctx: ExtensionContext) => T | Promise<T>;
+
+interface ToolCallResult {
+	block: true;
+	reason: string;
+}
 
 interface Fingerprint {
 	path: string;
@@ -89,7 +103,9 @@ function fingerprintSize(fingerprint: Fingerprint): number {
 
 const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
 const absolutePathAliases = new Map<string, string>();
+const fileMutationQueues = new Map<string, Promise<void>>();
 const localQueues = new Map<string, Promise<unknown>>();
+let registrationQueue = Promise.resolve();
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 function normalizeToolPath(inputPath: string): string {
@@ -180,6 +196,51 @@ function queueByPath<T>(trackedPath: string, fn: () => Promise<T>): Promise<T> {
 		}),
 	);
 	return current;
+}
+
+function isMissingPathError(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error.code === "ENOENT" || error.code === "ENOTDIR")
+	);
+}
+
+async function getMutationQueueKey(filePath: string): Promise<string> {
+	const resolvedPath = path.resolve(filePath);
+	try {
+		return await fs.realpath(resolvedPath);
+	} catch (error) {
+		if (isMissingPathError(error)) return resolvedPath;
+		throw error;
+	}
+}
+
+async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+	const registration = registrationQueue.then(async () => {
+		const key = await getMutationQueueKey(filePath);
+		const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
+		let releaseNext!: () => void;
+		const nextQueue = new Promise<void>((resolveQueue) => {
+			releaseNext = resolveQueue;
+		});
+		const chainedQueue = currentQueue.then(() => nextQueue);
+		fileMutationQueues.set(key, chainedQueue);
+		return { key, currentQueue, chainedQueue, releaseNext };
+	});
+	registrationQueue = registration.then(() => undefined, () => undefined);
+
+	const { key, currentQueue, chainedQueue, releaseNext } = await registration;
+	await currentQueue;
+	try {
+		return await fn();
+	} finally {
+		releaseNext();
+		if (fileMutationQueues.get(key) === chainedQueue) {
+			fileMutationQueues.delete(key);
+		}
+	}
 }
 
 async function queuedFileOperation<T>(trackedPath: string, fn: () => Promise<T>): Promise<T> {

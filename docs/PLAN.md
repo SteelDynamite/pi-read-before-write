@@ -11,7 +11,7 @@ The extension should block `edit` and destructive `write` calls when the target 
 - Do not patch Pi core.
 - Do not prevent user edits generally.
 - Do not parse or police arbitrary `bash` file mutations.
-- Do not replace Pi's existing `withFileMutationQueue()` race protection.
+- Preserve same-file mutation serialization.
 - Do not rely on timestamps alone.
 
 ## Desired behavior
@@ -96,7 +96,7 @@ Use Pi extension hooks:
 
 Pi runs sibling tool calls in parallel by default, but `tool_call` preflight is sequential. This extension should still keep its own per-path promise queue around guard/update logic to avoid interleaving extension state checks.
 
-Use Pi's exported `withFileMutationQueue()` if available, or a small internal queue keyed by canonical path.
+Use a small internal queue keyed by canonical path.
 
 For guard correctness, the check must happen as close as possible to the tool execution. Since extension `tool_call` runs before core `edit`/`write`, there is still a small TOCTOU window before the built-in tool writes. This is acceptable for the extension prototype and should be documented.
 
@@ -187,7 +187,6 @@ If the extension proves useful:
 ## Implementation outline
 
 ```ts
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -201,6 +200,10 @@ interface Fingerprint {
 }
 
 const fingerprints = new FingerprintCache(100, 1024 * 1024);
+
+interface ExtensionAPI {
+  on(name: "tool_call" | "tool_result", handler: Function): void;
+}
 
 export default function readBeforeWrite(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
