@@ -1,5 +1,6 @@
 ---
 description: Maintains the pi-read-before-write stale-file protection extension
+model: gpt-5.3-codex-spark
 manifest: true
 resumable: true
 ---
