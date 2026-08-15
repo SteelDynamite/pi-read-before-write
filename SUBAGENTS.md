@@ -1,5 +1,5 @@
 ---
-description: Maintains the pi-read-before-write stale-file protection extension
+description: Owns Pi read/edit/write interception that fingerprints successful reads, blocks unread or stale edits and existing-file writes, refreshes bounded in-memory state after mutations, and excludes bash or external-tool changes.
 manifest: true
 resumable: true
 ---
