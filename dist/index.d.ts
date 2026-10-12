@@ -2,6 +2,7 @@ interface ExtensionContext {
     cwd: string;
 }
 interface ExtensionAPI {
+    on(name: "session_start", handler: () => void): void;
     on(name: "tool_call", handler: ExtensionHandler<ToolCallResult | undefined>): void;
     on(name: "tool_result", handler: ExtensionHandler<undefined>): void;
 }

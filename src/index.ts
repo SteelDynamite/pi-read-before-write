@@ -9,6 +9,7 @@ interface ExtensionContext {
 }
 
 interface ExtensionAPI {
+	on(name: "session_start", handler: () => void): void;
 	on(name: "tool_call", handler: ExtensionHandler<ToolCallResult | undefined>): void;
 	on(name: "tool_result", handler: ExtensionHandler<undefined>): void;
 }
@@ -46,6 +47,7 @@ const config = {
 } as const;
 
 class FingerprintCache {
+	readonly absolutePathAliases = new Map<string, string>();
 	private readonly entries = new Map<string, Fingerprint>();
 	private totalBytes = 0;
 
@@ -101,8 +103,6 @@ function fingerprintSize(fingerprint: Fingerprint): number {
 	);
 }
 
-const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
-const absolutePathAliases = new Map<string, string>();
 const fileMutationQueues = new Map<string, Promise<void>>();
 const localQueues = new Map<string, Promise<unknown>>();
 let registrationQueue = Promise.resolve();
@@ -139,16 +139,17 @@ export async function resolveTrackedPath(inputPath: string, cwd: string): Promis
 	}
 }
 
-function getFingerprint(trackedPath: string, absolutePath: string): Fingerprint | undefined {
-	return fingerprints.get(trackedPath) ?? fingerprints.get(absolutePathAliases.get(absolutePath) ?? "");
+function getFingerprint(fingerprints: FingerprintCache, trackedPath: string, absolutePath: string): Fingerprint | undefined {
+	return fingerprints.get(trackedPath) ?? fingerprints.get(fingerprints.absolutePathAliases.get(absolutePath) ?? "");
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
 	try {
 		await fs.access(filePath);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		if (isMissingPathError(error)) return false;
+		throw error;
 	}
 }
 
@@ -160,7 +161,7 @@ async function hashFile(filePath: string): Promise<{ hash: string; size: number 
 	};
 }
 
-async function recordFingerprint(inputPath: string, cwd: string): Promise<Fingerprint | undefined> {
+async function recordFingerprint(fingerprints: FingerprintCache, inputPath: string, cwd: string): Promise<Fingerprint | undefined> {
 	const absolutePath = resolveAbsolutePath(inputPath, cwd);
 	const trackedPath = await resolveTrackedPath(inputPath, cwd);
 	try {
@@ -173,13 +174,13 @@ async function recordFingerprint(inputPath: string, cwd: string): Promise<Finger
 			recordedAt: Date.now(),
 		};
 		fingerprints.set(trackedPath, fingerprint);
-		absolutePathAliases.set(absolutePath, trackedPath);
+		fingerprints.absolutePathAliases.set(absolutePath, trackedPath);
 		return fingerprint;
 	} catch {
 		fingerprints.delete(trackedPath);
-		const alias = absolutePathAliases.get(absolutePath);
+		const alias = fingerprints.absolutePathAliases.get(absolutePath);
 		if (alias) fingerprints.delete(alias);
-		absolutePathAliases.delete(absolutePath);
+		fingerprints.absolutePathAliases.delete(absolutePath);
 		return undefined;
 	}
 }
@@ -187,14 +188,14 @@ async function recordFingerprint(inputPath: string, cwd: string): Promise<Finger
 function queueByPath<T>(trackedPath: string, fn: () => Promise<T>): Promise<T> {
 	const previous = localQueues.get(trackedPath) ?? Promise.resolve();
 	const current = previous.catch(() => undefined).then(fn);
-	localQueues.set(
-		trackedPath,
-		current.finally(() => {
-			if (localQueues.get(trackedPath) === current) {
-				localQueues.delete(trackedPath);
-			}
-		}),
-	);
+	const queued = current.finally(() => {
+		if (localQueues.get(trackedPath) === queued) {
+			localQueues.delete(trackedPath);
+		}
+	});
+	localQueues.set(trackedPath, queued);
+	// The caller observes current; also handle the cleanup promise's rejection.
+	void queued.catch(() => undefined);
 	return current;
 }
 
@@ -252,6 +253,7 @@ function getPathInput(event: ToolEventWithPath): string | undefined {
 }
 
 async function guardFreshness(
+	fingerprints: FingerprintCache,
 	toolName: "edit" | "write",
 	inputPath: string,
 	cwd: string,
@@ -260,7 +262,7 @@ async function guardFreshness(
 	const trackedPath = await resolveTrackedPath(inputPath, cwd);
 	return queuedFileOperation(trackedPath, async () => {
 		const exists = await pathExists(trackedPath);
-		const fingerprint = getFingerprint(trackedPath, absolutePath);
+		const fingerprint = getFingerprint(fingerprints, trackedPath, absolutePath);
 
 		if (!exists) {
 			if (fingerprint) {
@@ -296,12 +298,17 @@ async function guardFreshness(
 }
 
 export default function readBeforeWrite(pi: ExtensionAPI) {
+	let fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
+	pi.on("session_start", () => {
+		fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
 		const inputPath = getPathInput(event);
 		if (!inputPath) return undefined;
 
-		return guardFreshness(event.toolName, inputPath, ctx.cwd);
+		return guardFreshness(fingerprints, event.toolName, inputPath, ctx.cwd);
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
@@ -310,8 +317,10 @@ export default function readBeforeWrite(pi: ExtensionAPI) {
 		const inputPath = getPathInput(event);
 		if (!inputPath) return undefined;
 
+		// An in-flight result must not populate a replacement session's cache.
+		const sessionFingerprints = fingerprints;
 		const trackedPath = await resolveTrackedPath(inputPath, ctx.cwd);
-		await queuedFileOperation(trackedPath, () => recordFingerprint(inputPath, ctx.cwd));
+		await queuedFileOperation(trackedPath, () => recordFingerprint(sessionFingerprints, inputPath, ctx.cwd));
 		return undefined;
 	});
 }

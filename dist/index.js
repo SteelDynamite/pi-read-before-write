@@ -14,6 +14,7 @@ const config = {
 class FingerprintCache {
     maxEntries;
     maxBytes;
+    absolutePathAliases = new Map();
     entries = new Map();
     totalBytes = 0;
     constructor(maxEntries, maxBytes) {
@@ -62,8 +63,6 @@ function fingerprintSize(fingerprint) {
         Buffer.byteLength(fingerprint.hash) +
         16);
 }
-const fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
-const absolutePathAliases = new Map();
 const fileMutationQueues = new Map();
 const localQueues = new Map();
 let registrationQueue = Promise.resolve();
@@ -97,16 +96,18 @@ export async function resolveTrackedPath(inputPath, cwd) {
         return absolute;
     }
 }
-function getFingerprint(trackedPath, absolutePath) {
-    return fingerprints.get(trackedPath) ?? fingerprints.get(absolutePathAliases.get(absolutePath) ?? "");
+function getFingerprint(fingerprints, trackedPath, absolutePath) {
+    return fingerprints.get(trackedPath) ?? fingerprints.get(fingerprints.absolutePathAliases.get(absolutePath) ?? "");
 }
 async function pathExists(filePath) {
     try {
         await fs.access(filePath);
         return true;
     }
-    catch {
-        return false;
+    catch (error) {
+        if (isMissingPathError(error))
+            return false;
+        throw error;
     }
 }
 async function hashFile(filePath) {
@@ -116,7 +117,7 @@ async function hashFile(filePath) {
         size: bytes.byteLength,
     };
 }
-async function recordFingerprint(inputPath, cwd) {
+async function recordFingerprint(fingerprints, inputPath, cwd) {
     const absolutePath = resolveAbsolutePath(inputPath, cwd);
     const trackedPath = await resolveTrackedPath(inputPath, cwd);
     try {
@@ -129,26 +130,29 @@ async function recordFingerprint(inputPath, cwd) {
             recordedAt: Date.now(),
         };
         fingerprints.set(trackedPath, fingerprint);
-        absolutePathAliases.set(absolutePath, trackedPath);
+        fingerprints.absolutePathAliases.set(absolutePath, trackedPath);
         return fingerprint;
     }
     catch {
         fingerprints.delete(trackedPath);
-        const alias = absolutePathAliases.get(absolutePath);
+        const alias = fingerprints.absolutePathAliases.get(absolutePath);
         if (alias)
             fingerprints.delete(alias);
-        absolutePathAliases.delete(absolutePath);
+        fingerprints.absolutePathAliases.delete(absolutePath);
         return undefined;
     }
 }
 function queueByPath(trackedPath, fn) {
     const previous = localQueues.get(trackedPath) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(fn);
-    localQueues.set(trackedPath, current.finally(() => {
-        if (localQueues.get(trackedPath) === current) {
+    const queued = current.finally(() => {
+        if (localQueues.get(trackedPath) === queued) {
             localQueues.delete(trackedPath);
         }
-    }));
+    });
+    localQueues.set(trackedPath, queued);
+    // The caller observes current; also handle the cleanup promise's rejection.
+    void queued.catch(() => undefined);
     return current;
 }
 function isMissingPathError(error) {
@@ -199,12 +203,12 @@ async function queuedFileOperation(trackedPath, fn) {
 function getPathInput(event) {
     return typeof event.input.path === "string" ? event.input.path : undefined;
 }
-async function guardFreshness(toolName, inputPath, cwd) {
+async function guardFreshness(fingerprints, toolName, inputPath, cwd) {
     const absolutePath = resolveAbsolutePath(inputPath, cwd);
     const trackedPath = await resolveTrackedPath(inputPath, cwd);
     return queuedFileOperation(trackedPath, async () => {
         const exists = await pathExists(trackedPath);
-        const fingerprint = getFingerprint(trackedPath, absolutePath);
+        const fingerprint = getFingerprint(fingerprints, trackedPath, absolutePath);
         if (!exists) {
             if (fingerprint) {
                 return {
@@ -237,13 +241,17 @@ async function guardFreshness(toolName, inputPath, cwd) {
     });
 }
 export default function readBeforeWrite(pi) {
+    let fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
+    pi.on("session_start", () => {
+        fingerprints = new FingerprintCache(config.maxFingerprints, config.maxFingerprintBytes);
+    });
     pi.on("tool_call", async (event, ctx) => {
         if (event.toolName !== "edit" && event.toolName !== "write")
             return undefined;
         const inputPath = getPathInput(event);
         if (!inputPath)
             return undefined;
-        return guardFreshness(event.toolName, inputPath, ctx.cwd);
+        return guardFreshness(fingerprints, event.toolName, inputPath, ctx.cwd);
     });
     pi.on("tool_result", async (event, ctx) => {
         if (event.isError)
@@ -253,8 +261,10 @@ export default function readBeforeWrite(pi) {
         const inputPath = getPathInput(event);
         if (!inputPath)
             return undefined;
+        // An in-flight result must not populate a replacement session's cache.
+        const sessionFingerprints = fingerprints;
         const trackedPath = await resolveTrackedPath(inputPath, ctx.cwd);
-        await queuedFileOperation(trackedPath, () => recordFingerprint(inputPath, ctx.cwd));
+        await queuedFileOperation(trackedPath, () => recordFingerprint(sessionFingerprints, inputPath, ctx.cwd));
         return undefined;
     });
 }
